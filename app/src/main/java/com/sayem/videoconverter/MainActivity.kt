@@ -169,8 +169,8 @@ private fun HomeScreen(
                     Icon(Icons.Rounded.Movie, null, tint = Color(0xFF64E6B0), modifier = Modifier.padding(12.dp))
                 }
                 Column(Modifier.padding(start = 12.dp)) {
-                    Text("SAYEM", color = Color.White, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
-                    Text("VIDEO CONVERTER", color = Color(0xFF8B929E), fontSize = 11.sp, letterSpacing = 1.4.sp)
+                    Text("VIDEO CODEC", color = Color.White, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                    Text("CONVERTER", color = Color(0xFF8B929E), fontSize = 11.sp, letterSpacing = 1.4.sp)
                 }
             }
             Spacer(Modifier.height(42.dp))
