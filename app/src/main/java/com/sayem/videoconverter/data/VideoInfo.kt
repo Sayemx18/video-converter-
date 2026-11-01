@@ -5,6 +5,7 @@ data class VideoInfo(
     val name: String,
     val width: Int,
     val height: Int,
+    val rotationDegrees: Int,
     val durationMs: Long,
     val sizeBytes: Long
 )

@@ -17,19 +17,23 @@ class VideoMetadataReader(private val context: Context) {
         return VideoInfo(
             uri = uri,
             name = nameAndSize.first.ifBlank { "Video" },
-            width = values.first,
-            height = values.second,
-            durationMs = values.third,
+            width = if (values.rotationDegrees % 180 == 90) values.height else values.width,
+            height = if (values.rotationDegrees % 180 == 90) values.width else values.height,
+            rotationDegrees = values.rotationDegrees,
+            durationMs = values.durationMs,
             sizeBytes = nameAndSize.second
         )
     }
 
-    private fun MediaMetadataRetriever.useRetriever(uri: Uri): Triple<Int, Int, Long> = try {
+    private data class Metadata(val width: Int, val height: Int, val durationMs: Long, val rotationDegrees: Int)
+
+    private fun MediaMetadataRetriever.useRetriever(uri: Uri): Metadata = try {
         setDataSource(context, uri)
-        Triple(
+        Metadata(
             extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0,
             extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0,
-            extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L,
+            extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
         )
     } finally {
         release()

@@ -1,13 +1,15 @@
 package com.sayem.videoconverter
 
 import android.content.Intent
-import android.net.Uri
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.Manifest
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,8 +19,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -29,13 +32,15 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -44,17 +49,70 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sayem.videoconverter.data.VideoInfo
 import com.sayem.videoconverter.data.VideoMetadataReader
+import com.sayem.videoconverter.conversion.ConversionRequest
+import com.sayem.videoconverter.conversion.Media3VideoConverter
 import com.sayem.videoconverter.ui.theme.AppTheme
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val metadataReader = VideoMetadataReader(this)
+        val converter = Media3VideoConverter(this)
         setContent {
             AppTheme {
                 var video by remember { mutableStateOf<VideoInfo?>(null) }
                 var pickerError by remember { mutableStateOf<String?>(null) }
+                var statusMessage by remember { mutableStateOf<String?>(null) }
+                var statusIsSuccess by remember { mutableStateOf(false) }
+                var isConverting by remember { mutableStateOf(false) }
+                var isSavingToGallery by remember { mutableStateOf(false) }
+                var progress by remember { mutableStateOf<Int?>(null) }
+                var conversionJob by remember { mutableStateOf<Job?>(null) }
+                val scope = rememberCoroutineScope()
+
+                fun startConversion(selected: VideoInfo) {
+                    if (isConverting) return
+                    isConverting = true
+                    progress = null
+                    isSavingToGallery = false
+                    statusMessage = "Preparing video…"
+                    statusIsSuccess = false
+                    conversionJob = scope.launch {
+                        try {
+                            converter.convert(
+                                request = ConversionRequest(selected.uri, selected.width, selected.height),
+                                onProgress = { value -> progress = value },
+                                onSavingToGallery = { isSavingToGallery = true }
+                            )
+                            statusMessage = "Converted video saved to your Gallery."
+                            statusIsSuccess = true
+                        } catch (_: CancellationException) {
+                            statusMessage = "Conversion cancelled."
+                            statusIsSuccess = false
+                        } catch (error: Exception) {
+                            statusMessage = error.localizedMessage ?: "Conversion failed. Please try another video."
+                            statusIsSuccess = false
+                        } finally {
+                            isConverting = false
+                            isSavingToGallery = false
+                            conversionJob = null
+                        }
+                    }
+                }
+
+                val legacyStoragePermission = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { granted ->
+                    if (granted) video?.let(::startConversion)
+                    else {
+                        statusMessage = "Storage permission is needed to save videos on Android 8 and 9."
+                        statusIsSuccess = false
+                    }
+                }
                 val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     if (uri != null) {
                         runCatching {
@@ -64,13 +122,28 @@ class MainActivity : ComponentActivity() {
                             .onFailure { pickerError = "Could not read this video's details." }
                             .getOrNull()
                         if (video != null) pickerError = null
+                        statusMessage = null
                     }
                 }
 
                 HomeScreen(
                     video = video,
-                    message = pickerError,
-                    onSelect = { picker.launch(arrayOf("video/*")) }
+                    message = pickerError ?: statusMessage,
+                    messageIsSuccess = pickerError == null && statusIsSuccess,
+                    isConverting = isConverting,
+                    isSavingToGallery = isSavingToGallery,
+                    progress = progress,
+                    onSelect = { if (!isConverting) picker.launch(arrayOf("video/*")) },
+                    onConvert = {
+                        video?.let { selected ->
+                            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+                                ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+                            ) {
+                                legacyStoragePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                            } else startConversion(selected)
+                        }
+                    },
+                    onCancel = { conversionJob?.cancel() }
                 )
             }
         }
@@ -78,9 +151,19 @@ class MainActivity : ComponentActivity() {
 }
 
 @androidx.compose.runtime.Composable
-private fun HomeScreen(video: VideoInfo?, message: String?, onSelect: () -> Unit) {
+private fun HomeScreen(
+    video: VideoInfo?,
+    message: String?,
+    messageIsSuccess: Boolean,
+    isConverting: Boolean,
+    isSavingToGallery: Boolean,
+    progress: Int?,
+    onSelect: () -> Unit,
+    onConvert: () -> Unit,
+    onCancel: () -> Unit
+) {
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF0B0D12)) {
-        Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 32.dp)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 32.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(shape = RoundedCornerShape(14.dp), color = Color(0xFF1C2830), modifier = Modifier.size(48.dp)) {
                     Icon(Icons.Rounded.Movie, null, tint = Color(0xFF64E6B0), modifier = Modifier.padding(12.dp))
@@ -108,13 +191,34 @@ private fun HomeScreen(video: VideoInfo?, message: String?, onSelect: () -> Unit
                     } else {
                         VideoDetails(video)
                     }
-                    if (message != null) Text(message, color = Color(0xFFFF8A80), modifier = Modifier.padding(top = 12.dp))
+                    if (message != null) Text(message, color = if (messageIsSuccess) Color(0xFF64E6B0) else Color(0xFFFF8A80), modifier = Modifier.padding(top = 12.dp))
                     Button(
                         onClick = onSelect,
+                        enabled = !isConverting,
                         modifier = Modifier.fillMaxWidth().padding(top = 20.dp).height(52.dp),
                         shape = RoundedCornerShape(15.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF64E6B0), contentColor = Color(0xFF082017))
                     ) { Text(if (video == null) "Select video" else "Choose another video", fontWeight = FontWeight.Bold) }
+                    if (video != null) {
+                        if (isConverting) {
+                            Row(Modifier.fillMaxWidth().padding(top = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(if (isSavingToGallery) "Saving to Gallery" else "Converting", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                if (!isSavingToGallery) Text(progress?.let { "$it%" } ?: "Preparing…", color = Color(0xFF64E6B0), fontSize = 13.sp)
+                            }
+                            if (progress == null || isSavingToGallery) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 10.dp), color = Color(0xFF64E6B0), trackColor = Color(0xFF29313A))
+                            else LinearProgressIndicator({ progress.coerceIn(0, 100) / 100f }, Modifier.fillMaxWidth().padding(top = 10.dp), color = Color(0xFF64E6B0), trackColor = Color(0xFF29313A))
+                            OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(48.dp), shape = RoundedCornerShape(15.dp)) {
+                                Text("Cancel conversion", color = Color(0xFFFF8A80))
+                            }
+                        } else {
+                            Button(
+                                onClick = onConvert,
+                                modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(52.dp),
+                                shape = RoundedCornerShape(15.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF64E6B0), contentColor = Color(0xFF082017))
+                            ) { Text("Convert to Full HD", fontWeight = FontWeight.Bold) }
+                        }
+                    }
                 }
             }
 
@@ -127,15 +231,14 @@ private fun HomeScreen(video: VideoInfo?, message: String?, onSelect: () -> Unit
                         Column(Modifier.padding(start = 12.dp).weight(1f)) {
                             val target = video?.let { if (it.height > it.width) "1080 × 1920" else "1920 × 1080" } ?: "1920 × 1080 / 1080 × 1920"
                             Text("Full HD · $target", color = Color.White, fontWeight = FontWeight.SemiBold)
-                            Text("Aspect ratio preserved · H.264 AVC", color = Color(0xFF9BA2AE), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                            Text("Aspect ratio preserved · H.264 AVC · AAC audio", color = Color(0xFF9BA2AE), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                         }
                         Icon(Icons.Rounded.CheckCircle, null, tint = Color(0xFF64E6B0))
                     }
                 }
             }
-            Spacer(Modifier.weight(1f))
-            Text("CONVERSION ENGINE NOT CONNECTED", color = Color(0xFF777F8C), fontSize = 10.sp, letterSpacing = 1.1.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
-            Text("The interface is ready. Video encoding will be added in a later step.", color = Color(0xFF626A76), fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp).align(Alignment.CenterHorizontally))
+            Spacer(Modifier.height(24.dp))
+            Text("PROCESSED ON YOUR DEVICE", color = Color(0xFF777F8C), fontSize = 10.sp, letterSpacing = 1.1.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
         }
     }
 }
