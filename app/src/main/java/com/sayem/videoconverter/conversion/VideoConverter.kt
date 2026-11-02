@@ -47,10 +47,30 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+enum class ResolutionPreset(
+    val label: String,
+    val quality: String,
+    val landscapeWidth: Int,
+    val landscapeHeight: Int,
+    val portraitWidth: Int,
+    val portraitHeight: Int
+) {
+    FULL_HD("1080p", "Full HD", 1920, 1080, 1080, 1920),
+    HD("720p", "HD", 1280, 720, 720, 1280),
+    SD("480p", "SD", 854, 480, 480, 854);
+
+    fun dimensions(portrait: Boolean): Pair<Int, Int> = if (portrait) {
+        portraitWidth to portraitHeight
+    } else {
+        landscapeWidth to landscapeHeight
+    }
+}
+
 data class ConversionRequest(
     val source: Uri,
     val width: Int,
-    val height: Int
+    val height: Int,
+    val resolutionPreset: ResolutionPreset = ResolutionPreset.FULL_HD
 )
 
 /** Uses Media3 Transformer for device-native H.264/AAC transcoding and publishes directly to Gallery. */
@@ -114,7 +134,7 @@ class Media3VideoConverter(context: Context) {
                         cleanupOutput()
                         if (continuation.isActive) {
                             continuation.resumeWithException(
-                                IllegalStateException("This device cannot produce the required Full HD H.264/AAC output.")
+                                IllegalStateException("This device cannot produce the required ${request.resolutionPreset.label} H.264/AAC output.")
                             )
                         }
                     }
@@ -166,8 +186,7 @@ class Media3VideoConverter(context: Context) {
 
             try {
                 require(request.width > 0 && request.height > 0) { "Could not determine the video's dimensions." }
-                val outputWidth = if (request.height > request.width) PORTRAIT_WIDTH else LANDSCAPE_WIDTH
-                val outputHeight = if (request.height > request.width) PORTRAIT_HEIGHT else LANDSCAPE_HEIGHT
+                val (outputWidth, outputHeight) = request.resolutionPreset.dimensions(request.height > request.width)
                 requestedOutputHeight = outputHeight
                 val editedItemBuilder = EditedMediaItem.Builder(MediaItem.fromUri(request.source))
                 if (request.width != outputWidth || request.height != outputHeight) {
@@ -326,10 +345,6 @@ class Media3VideoConverter(context: Context) {
     }
 
     private companion object {
-        const val LANDSCAPE_WIDTH = 1920
-        const val LANDSCAPE_HEIGHT = 1080
-        const val PORTRAIT_WIDTH = 1080
-        const val PORTRAIT_HEIGHT = 1920
         const val PROGRESS_INTERVAL_MS = 400L
         const val COPY_BUFFER_SIZE = 128 * 1024
         const val MAX_ERROR_DETAIL_LENGTH = 180

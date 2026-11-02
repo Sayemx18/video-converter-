@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -51,6 +53,7 @@ import com.sayem.videoconverter.data.VideoInfo
 import com.sayem.videoconverter.data.VideoMetadataReader
 import com.sayem.videoconverter.conversion.ConversionRequest
 import com.sayem.videoconverter.conversion.Media3VideoConverter
+import com.sayem.videoconverter.conversion.ResolutionPreset
 import com.sayem.videoconverter.ui.theme.AppTheme
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -72,9 +75,10 @@ class MainActivity : ComponentActivity() {
                 var isSavingToGallery by remember { mutableStateOf(false) }
                 var progress by remember { mutableStateOf<Int?>(null) }
                 var conversionJob by remember { mutableStateOf<Job?>(null) }
+                var resolutionPreset by remember { mutableStateOf(ResolutionPreset.FULL_HD) }
                 val scope = rememberCoroutineScope()
 
-                fun startConversion(selected: VideoInfo) {
+                fun startConversion(selected: VideoInfo, preset: ResolutionPreset = resolutionPreset) {
                     if (isConverting) return
                     isConverting = true
                     progress = null
@@ -84,7 +88,7 @@ class MainActivity : ComponentActivity() {
                     conversionJob = scope.launch {
                         try {
                             converter.convert(
-                                request = ConversionRequest(selected.uri, selected.width, selected.height),
+                                request = ConversionRequest(selected.uri, selected.width, selected.height, preset),
                                 onProgress = { value -> progress = value },
                                 onSavingToGallery = { isSavingToGallery = true }
                             )
@@ -133,6 +137,8 @@ class MainActivity : ComponentActivity() {
                     isConverting = isConverting,
                     isSavingToGallery = isSavingToGallery,
                     progress = progress,
+                    resolutionPreset = resolutionPreset,
+                    onResolutionPresetChange = { resolutionPreset = it },
                     onSelect = { if (!isConverting) picker.launch(arrayOf("video/*")) },
                     onConvert = {
                         video?.let { selected ->
@@ -158,10 +164,13 @@ private fun HomeScreen(
     isConverting: Boolean,
     isSavingToGallery: Boolean,
     progress: Int?,
+    resolutionPreset: ResolutionPreset,
+    onResolutionPresetChange: (ResolutionPreset) -> Unit,
     onSelect: () -> Unit,
     onConvert: () -> Unit,
     onCancel: () -> Unit
 ) {
+    val (targetWidth, targetHeight) = resolutionPreset.dimensions(video?.let { it.height > it.width } ?: false)
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF0B0D12)) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 32.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -175,7 +184,7 @@ private fun HomeScreen(
             }
             Spacer(Modifier.height(42.dp))
             Text("Make every frame\nlook its best.", color = Color.White, fontSize = 34.sp, lineHeight = 40.sp, fontWeight = FontWeight.Bold)
-            Text("Convert your videos to crisp, shareable Full HD.", color = Color(0xFF9BA2AE), modifier = Modifier.padding(top = 12.dp))
+            Text("Choose the perfect size for every video.", color = Color(0xFF9BA2AE), modifier = Modifier.padding(top = 12.dp))
             Spacer(Modifier.height(28.dp))
 
             Card(
@@ -216,7 +225,7 @@ private fun HomeScreen(
                                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(52.dp),
                                 shape = RoundedCornerShape(15.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF64E6B0), contentColor = Color(0xFF082017))
-                            ) { Text("Convert to Full HD", fontWeight = FontWeight.Bold) }
+                            ) { Text("Convert to ${resolutionPreset.label} ${resolutionPreset.quality}", fontWeight = FontWeight.Bold) }
                         }
                     }
                 }
@@ -226,14 +235,29 @@ private fun HomeScreen(
             Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF141820))) {
                 Column(Modifier.fillMaxWidth().padding(18.dp)) {
                     Text("OUTPUT PRESET", color = Color(0xFF8B929E), fontSize = 11.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
-                    Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ResolutionPreset.entries.forEach { preset ->
+                            val selected = resolutionPreset == preset
+                            Card(
+                                modifier = Modifier.weight(1f).clickable(enabled = !isConverting) { onResolutionPresetChange(preset) },
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, if (selected) Color(0xFF64E6B0) else Color(0xFF29313A)),
+                                colors = CardDefaults.cardColors(containerColor = if (selected) Color(0xFF1C302B) else Color(0xFF1B2029))
+                            ) {
+                                Column(Modifier.fillMaxWidth().padding(vertical = 13.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(preset.label, color = if (selected) Color(0xFF64E6B0) else Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    Text(preset.quality, color = Color(0xFF9BA2AE), fontSize = 11.sp, modifier = Modifier.padding(top = 3.dp))
+                                }
+                            }
+                        }
+                    }
+                    Row(Modifier.padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Rounded.ArrowDownward, null, tint = Color(0xFF64E6B0))
                         Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                            val target = video?.let { if (it.height > it.width) "1080 × 1920" else "1920 × 1080" } ?: "1920 × 1080 / 1080 × 1920"
-                            Text("Full HD · $target", color = Color.White, fontWeight = FontWeight.SemiBold)
+                            Text("${resolutionPreset.quality} · ${targetWidth} × ${targetHeight}", color = Color.White, fontWeight = FontWeight.SemiBold)
                             Text("Aspect ratio preserved · H.264 AVC · AAC audio", color = Color(0xFF9BA2AE), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                         }
-                        Icon(Icons.Rounded.CheckCircle, null, tint = Color(0xFF64E6B0))
+                        if (video != null) Icon(Icons.Rounded.CheckCircle, null, tint = Color(0xFF64E6B0))
                     }
                 }
             }
